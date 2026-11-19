@@ -5,7 +5,7 @@
 groups = ["default", "dev", "postgres", "rq"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.1"
-content_hash = "sha256:562015234bad14a630e024b116e6c159899e0275e5858964f898d783f51974be"
+content_hash = "sha256:91476574bdcf37bb45ea67c925e12f56d69ac3bd275ea99210afe2935d9eff8d"
 
 [[metadata.targets]]
 requires_python = ">=3.12"

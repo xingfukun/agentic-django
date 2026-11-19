@@ -337,11 +337,11 @@ values. Custom serializers implement the protocols in
 
 SDK calls use one event loop per process so shared async clients can reuse their
 connections. Tool approvals use the OpenAI Agents SDK's serialized `RunState`.
-This version supports `openai-agents>=0.19.4,<0.20`. The lower bound matches
-the tested lockfile; the upper bound limits untested SDK changes. Existing
-installations should migrate before starting workers. Checkpoint schema
-compatibility across SDK upgrades is not guaranteed, so resolve outstanding
-approvals before changing that version.
+The package keeps its existing `openai-agents>=0.19.4` dependency range. The
+repository lockfile tests version 0.19.4. Existing installations should migrate
+before starting workers. Checkpoint schema compatibility across SDK upgrades is
+not guaranteed: resolve outstanding approvals before upgrading the SDK, and
+validate the target version's snapshot format.
 
 When a tool marked `needs_approval` interrupts a run, the run becomes
 `waiting_approval`, with one `AgentApproval` per tool call. The run detail API
