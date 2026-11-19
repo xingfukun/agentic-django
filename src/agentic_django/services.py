@@ -12,7 +12,8 @@ from typing import TYPE_CHECKING, Protocol
 if TYPE_CHECKING:
     from django.contrib.auth.base_user import AbstractBaseUser
 
-from agents import Agent, Runner
+from agents import Agent, Runner, RunState
+from agents.run_context import RunContextWrapper
 from agents.items import TResponseInputItem
 from agents.memory.session import Session
 from agents.result import RunResult, RunResultStreaming
@@ -26,7 +27,13 @@ from django.utils.module_loading import import_string
 
 from agentic_django.async_bridge import run_async
 from agentic_django.conf import get_concurrency_limit, get_settings
-from agentic_django.models import AgentEvent, AgentRun, AgentRunLock, AgentSession
+from agentic_django.models import (
+    AgentApproval,
+    AgentEvent,
+    AgentRun,
+    AgentRunLock,
+    AgentSession,
+)
 from agentic_django.registry import get_agent
 from agentic_django.serializers import EventSerializer, Serializer
 from agentic_django.sessions import get_session
@@ -164,9 +171,9 @@ def dispatch_pending_runs() -> int:
         else:
             pending_runs = pending_runs.select_for_update()
         active_sessions = set(
-            AgentRun.objects.filter(status=AgentRun.Status.RUNNING).values_list(
-                "session_id", flat=True
-            )
+            AgentRun.objects.filter(
+                status__in=[AgentRun.Status.RUNNING, AgentRun.Status.WAITING_APPROVAL]
+            ).values_list("session_id", flat=True)
         )
         while len(enqueued) < available:
             # Fetch one eligible row per slot without loading the full backlog.
@@ -205,6 +212,15 @@ def execute_run(run_id: str) -> None:
         session = get_session(run.session.session_key, run.owner)
         run_options = _build_run_options(run)
         context = _build_context(run)
+        decisions = (
+            list(
+                AgentApproval.objects.filter(
+                    run=run, round=run.approval_round
+                ).order_by("interruption_index")
+            )
+            if run.run_state is not None
+            else []
+        )
         if get_settings().enable_events:
             result = _run_with_events(
                 run=run,
@@ -212,13 +228,15 @@ def execute_run(run_id: str) -> None:
                 session=session,
                 context=context,
                 run_options=run_options,
+                decisions=decisions,
             )
         else:
 
             async def _run() -> RunResult:
+                state = await _restore_run_state(run, agent, context, decisions)
                 return await Runner.run(
                     agent,
-                    run_input(run.input_payload),
+                    state if state is not None else run_input(run.input_payload),
                     session=session,
                     context=context,
                     **run_options,
@@ -226,11 +244,13 @@ def execute_run(run_id: str) -> None:
 
             result = run_async(_run)
         if result.interruptions:
-            raise ValueError("Agent runs that require tool approval are not supported.")
+            _pause_for_approval(run, result)
+            return
         run.final_output = json_value(serializer.serialize(result.final_output))
         run.raw_responses = json_value(serializer.serialize(result.raw_responses))
         run.last_response_id = result.last_response_id or ""
         run.error = ""
+        run.run_state = None
         run.task_id = ""
         run.status = AgentRun.Status.COMPLETED
         run.finished_at = timezone.now()
@@ -240,6 +260,7 @@ def execute_run(run_id: str) -> None:
                 "raw_responses",
                 "last_response_id",
                 "error",
+                "run_state",
                 "task_id",
                 "status",
                 "finished_at",
@@ -290,7 +311,8 @@ def _reserve_run_slot(run: AgentRun) -> bool:
         if running_count >= limit:
             return False
         if AgentRun.objects.filter(
-            session_id=run.session_id, status=AgentRun.Status.RUNNING
+            session_id=run.session_id,
+            status__in=[AgentRun.Status.RUNNING, AgentRun.Status.WAITING_APPROVAL],
         ).exists():
             return False
         run.refresh_from_db(fields=["status"])
@@ -300,6 +322,113 @@ def _reserve_run_slot(run: AgentRun) -> bool:
         run.started_at = timezone.now()
         run.save(update_fields=["status", "started_at", "updated_at"])
     return True
+
+
+def _pause_for_approval(run: AgentRun, result: RunResult | RunResultStreaming) -> None:
+    state = json_value(result.to_state().to_json())
+    serializer = _get_serializer()
+    with transaction.atomic():
+        run.approval_round += 1
+        run.run_state = state
+        run.status = AgentRun.Status.WAITING_APPROVAL
+        run.task_id = ""
+        run.save(
+            update_fields=[
+                "approval_round",
+                "run_state",
+                "status",
+                "task_id",
+                "updated_at",
+            ]
+        )
+        for index, interruption in enumerate(result.interruptions):
+            approval = AgentApproval.objects.create(
+                run=run,
+                round=run.approval_round,
+                interruption_index=index,
+                tool_name=interruption.tool_name or "",
+                request=json_value(serializer.serialize(interruption.raw_item)),
+            )
+            _record_approval_event(run, "approval_requested", approval)
+
+
+async def _restore_run_state(
+    run: AgentRun, agent: Agent[object], context: object, decisions: list[AgentApproval]
+) -> RunState[object, Agent[object]] | None:
+    if run.run_state is None:
+        return None
+    if not isinstance(run.run_state, dict):
+        raise ValueError("Stored run state is invalid")
+    state = await RunState.from_json(
+        agent,
+        run.run_state,
+        context_override=RunContextWrapper(context) if context is not None else None,
+    )
+    interruptions = state.get_interruptions()
+    if len(interruptions) != len(decisions) or any(
+        decision.decision == AgentApproval.Decision.PENDING for decision in decisions
+    ):
+        raise ValueError("Run approval decisions are incomplete")
+    for approval in decisions:
+        interruption = interruptions[approval.interruption_index]
+        if approval.decision == AgentApproval.Decision.APPROVED:
+            state.approve(interruption)
+        else:
+            state.reject(interruption)
+    return state
+
+
+def resolve_approval(
+    *,
+    run_id: uuid.UUID,
+    approval_id: uuid.UUID,
+    owner: AbstractBaseUser,
+    decision: str,
+) -> AgentApproval:
+    if decision not in {
+        AgentApproval.Decision.APPROVED,
+        AgentApproval.Decision.REJECTED,
+    }:
+        raise ValueError("Invalid approval decision")
+    with _dispatch_lock():
+        run = AgentRun.objects.get(id=run_id, owner_id=owner.pk)
+        approval = AgentApproval.objects.get(id=approval_id, run=run)
+        if approval.decision != AgentApproval.Decision.PENDING:
+            if approval.decision != decision:
+                raise ValueError("Approval was already resolved differently")
+            return approval
+        if (
+            run.status != AgentRun.Status.WAITING_APPROVAL
+            or approval.round != run.approval_round
+        ):
+            raise ValueError("Approval is no longer pending")
+        approval.decision = decision
+        approval.resolved_at = timezone.now()
+        approval.save(update_fields=["decision", "resolved_at"])
+        _record_approval_event(run, "approval_resolved", approval)
+        if not AgentApproval.objects.filter(
+            run=run, round=run.approval_round, decision=AgentApproval.Decision.PENDING
+        ).exists():
+            run.status = AgentRun.Status.PENDING
+            run.save(update_fields=["status", "updated_at"])
+            enqueue_agent_run(str(run.id))
+    return approval
+
+
+def _record_approval_event(run: AgentRun, kind: str, approval: AgentApproval) -> None:
+    event = AgentEvent(
+        run=run,
+        sequence=_next_event_sequence(run),
+        event_type=kind,
+        payload={
+            "approval_id": str(approval.id),
+            "round": approval.round,
+            "tool_name": approval.tool_name,
+            "request": approval.request if kind == "approval_requested" else None,
+            "decision": approval.decision if kind == "approval_resolved" else None,
+        },
+    )
+    _persist_event(run, event)
 
 
 @contextmanager
@@ -357,14 +486,16 @@ def _run_with_events(
     session: Session,
     context: object,
     run_options: RunOptions,
+    decisions: list[AgentApproval],
 ) -> RunResultStreaming:
     event_serializer = _get_event_serializer()
     starting_sequence = _next_event_sequence(run)
 
     async def _consume() -> RunResultStreaming:
+        state = await _restore_run_state(run, agent, context, decisions)
         result = Runner.run_streamed(
             agent,
-            run_input(run.input_payload),
+            state if state is not None else run_input(run.input_payload),
             session=session,
             context=context,
             **run_options,

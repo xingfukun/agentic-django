@@ -37,12 +37,19 @@ JSON and HTMX polling endpoints.
    If events are enabled, `Runner.run_streamed` is used and semantic
    `RunItemStreamEvent`/`AgentUpdatedStreamEvent` payloads are persisted.
    The default event serializer skips raw token events.
-5. Completion serializes the result and saves `final_output`,
+5. Approval interruptions serialize the SDK `RunState` in `AgentRun.run_state`,
+   create indexed `AgentApproval` records, and transition to `waiting_approval`.
+   Decision requests atomically record approvals, then requeue the same run once
+   all approvals in the round are resolved. Execution restores the checkpoint,
+   applies decisions to SDK interruption items, and resumes. Further approval
+   rounds are supported. Waiting frees global concurrency capacity but reserves
+   the session from other runs.
+6. Completion serializes the result and saves `final_output`,
    `raw_responses`, `last_response_id`, and completed status, clears the task ID,
    then sends `agent_run_completed` and releases agent references.
-6. Failure stores a sanitized error when `DEBUG=False`, marks the run failed,
+7. Failure stores a sanitized error when `DEBUG=False`, marks the run failed,
    sends `agent_run_failed`, and re-raises for worker observability.
-7. HTMX clients poll the fragment endpoint. Terminal runs return
+8. HTMX clients poll the fragment endpoint. Terminal runs return
    `HttpResponseStopPolling` and emit `HX-Trigger: run-update` so dependent UI
    panels can update from the same polling loop.
 
@@ -146,10 +153,11 @@ logged and does not replace the completed or failed outcome of the current run.
 A cancelled SDK run task marks a streamed run failed, even when the event stream
 ends without an exception.
 
-The package has no tool approval or resume endpoint. A returned SDK result with
-pending approval interruptions marks the run failed. It must not be reported as
-completed. Host applications must resolve approval within their tool integration
-or use a workflow that stores and resumes the SDK state.
+The approval endpoint is owner-scoped. Decision transactions use the dispatch
+lock to prevent duplicate consumption. `approval_requested` and
+`approval_resolved` events share the run's ordered sequence. SDK checkpoint
+schema depends on the pinned SDK version. Approval requests and snapshots
+contain potentially sensitive tool arguments and must be protected.
 
 ## Queue reservations
 

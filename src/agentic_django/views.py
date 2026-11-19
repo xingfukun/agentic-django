@@ -15,10 +15,10 @@ from django_htmx.http import HttpResponseStopPolling, trigger_client_event
 
 from agentic_django.async_bridge import run_async
 from agentic_django.conf import get_settings, parse_rate_limit
-from agentic_django.models import AgentEvent, AgentRun, AgentSession
+from agentic_django.models import AgentApproval, AgentEvent, AgentRun, AgentSession
 from agentic_django.rate_limits import admit_request
 from agentic_django.registry import get_agent_registry
-from agentic_django.services import submit_agent_run
+from agentic_django.services import resolve_approval, submit_agent_run
 from agentic_django.sessions import get_session
 from agentic_django.types import (
     JsonObject,
@@ -114,8 +114,57 @@ class AgentRunDetailView(LoginRequiredMixin, View):
             "error": run.error,
             "started_at": _format_time(run.started_at),
             "finished_at": _format_time(run.finished_at),
+            "approvals": [
+                {
+                    "id": str(item.id),
+                    "tool_name": item.tool_name,
+                    "request": item.request,
+                    "decision": item.decision,
+                }
+                for item in run.approvals.filter(round=run.approval_round).order_by(
+                    "interruption_index"
+                )
+            ]
+            if run.status == AgentRun.Status.WAITING_APPROVAL
+            else [],
         }
         return JsonResponse(payload)
+
+
+class AgentApprovalDecisionView(LoginRequiredMixin, View):
+    def post(
+        self, request: HttpRequest, run_id: UUID, approval_id: UUID
+    ) -> JsonResponse:
+        run = get_object_or_404(AgentRun, id=run_id, owner=request.user)
+        try:
+            payload = _parse_payload(request)
+        except ValueError as exc:
+            return JsonResponse({"error": str(exc)}, status=400)
+        decision = payload.get("decision")
+        if decision not in {"approved", "rejected"}:
+            return JsonResponse(
+                {"error": "decision must be approved or rejected"}, status=400
+            )
+        try:
+            approval = resolve_approval(
+                run_id=run.id,
+                approval_id=approval_id,
+                owner=_authenticated_owner(request),
+                decision=decision,
+            )
+        except AgentApproval.DoesNotExist:
+            return JsonResponse({"error": "Approval not found"}, status=404)
+        except ValueError as exc:
+            return JsonResponse({"error": str(exc)}, status=409)
+        run.refresh_from_db(fields=["status"])
+        return JsonResponse(
+            {
+                "approval_id": str(approval.id),
+                "decision": approval.decision,
+                "run_id": str(run.id),
+                "status": run.status,
+            }
+        )
 
 
 class AgentRunFragmentView(LoginRequiredMixin, View):
@@ -126,9 +175,6 @@ class AgentRunFragmentView(LoginRequiredMixin, View):
 
 class AgentRunEventsView(LoginRequiredMixin, View):
     def get(self, request: HttpRequest, run_id: UUID) -> JsonResponse:
-        if not get_settings().enable_events:
-            return JsonResponse({"error": "events disabled"}, status=404)
-
         run = get_object_or_404(AgentRun, id=run_id, owner=request.user)
         after_param = request.GET.get("after")
         try:

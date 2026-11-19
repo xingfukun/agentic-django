@@ -78,6 +78,7 @@ class AgentRun(models.Model):
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"
         RUNNING = "running", "Running"
+        WAITING_APPROVAL = "waiting_approval", "Waiting for approval"
         COMPLETED = "completed", "Completed"
         FAILED = "failed", "Failed"
 
@@ -99,6 +100,10 @@ class AgentRun(models.Model):
         default=Status.PENDING,
     )
     input_payload: models.JSONField[JsonValue, JsonValue] = models.JSONField()
+    run_state: models.JSONField[JsonValue, JsonValue] = models.JSONField(
+        null=True, blank=True
+    )
+    approval_round = models.PositiveIntegerField(default=0)
     final_output: models.JSONField[JsonValue, JsonValue] = models.JSONField(
         null=True, blank=True
     )
@@ -172,6 +177,35 @@ class AgentEvent(models.Model):
 
     def __str__(self) -> str:
         return f"{self.run_id}:{self.sequence}"
+
+
+class AgentApproval(models.Model):
+    class Decision(models.TextChoices):
+        PENDING = "pending", "Pending"
+        APPROVED = "approved", "Approved"
+        REJECTED = "rejected", "Rejected"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    run = models.ForeignKey(
+        AgentRun, on_delete=models.CASCADE, related_name="approvals"
+    )
+    interruption_index = models.PositiveIntegerField()
+    round = models.PositiveIntegerField()
+    tool_name = models.CharField(max_length=200, blank=True, default="")
+    request: models.JSONField[JsonValue, JsonValue] = models.JSONField()
+    decision = models.CharField(
+        max_length=16, choices=Decision.choices, default=Decision.PENDING
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["run", "round", "interruption_index"],
+                name="agent_approval_unique_interruption",
+            ),
+        ]
 
 
 class AgentRunLock(models.Model):

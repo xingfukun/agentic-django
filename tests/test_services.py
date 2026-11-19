@@ -20,6 +20,7 @@ from agentic_django.models import AgentEvent, AgentRun, AgentSession
 from agentic_django.services import (
     _build_run_options,
     _persist_event,
+    _reserve_run_slot,
     dispatch_pending_runs,
     execute_run,
     submit_agent_run,
@@ -42,6 +43,14 @@ class DummyResult:
 
     def release_agents(self) -> None:
         self.released = True
+
+    def to_state(self) -> DummyState:
+        return DummyState()
+
+
+class DummyState:
+    def to_json(self) -> JsonObject:
+        return {"$schemaVersion": "test"}
 
 
 class DummyTaskResult:
@@ -219,7 +228,7 @@ def test_immediate_backend_completes_a_large_backlog(
 
 @pytest.mark.django_db()
 @pytest.mark.parametrize("events", [False, True])
-def test_pending_approval_is_failed_and_result_references_are_released(
+def test_pending_approval_waits_and_result_references_are_released(
     monkeypatch: pytest.MonkeyPatch,
     user: User,
     events: bool,
@@ -234,7 +243,9 @@ def test_pending_approval_is_failed_and_result_references_are_released(
         input_payload="hello",
     )
     result = DummyResult()
-    result.interruptions = [object()]
+    result.interruptions = [
+        SimpleNamespace(tool_name="test", raw_item={"name": "test"})
+    ]
     result.final_output = None
     completed: list[UUID] = []
 
@@ -251,17 +262,28 @@ def test_pending_approval_is_failed_and_result_references_are_released(
     agent_run_completed.connect(receiver, weak=False)
     try:
         with override_settings(AGENTIC_DJANGO_ENABLE_EVENTS=events):
-            with pytest.raises(ValueError, match="approval"):
-                execute_run(str(run.pk))
+            execute_run(str(run.pk))
     finally:
         agent_run_completed.disconnect(receiver)
     run.refresh_from_db()
-    assert run.status == AgentRun.Status.FAILED
-    assert run.finished_at is not None
+    assert run.status == AgentRun.Status.WAITING_APPROVAL
+    assert run.finished_at is None
     assert run.task_id == ""
     assert run.final_output is None
     assert completed == []
     assert result.released
+    assert run.approvals.count() == 1
+
+    same_session = AgentRun.objects.create(
+        session=session, owner=user, agent_key="default", input_payload="later"
+    )
+    other_session = AgentSession.objects.create(session_key="other", owner=user)
+    other_run = AgentRun.objects.create(
+        session=other_session, owner=user, agent_key="default", input_payload="other"
+    )
+    with override_settings(AGENTIC_DJANGO_CONCURRENCY_LIMIT=1):
+        assert not _reserve_run_slot(same_session)
+        assert _reserve_run_slot(other_run)
 
 
 def _replace_run_task(
