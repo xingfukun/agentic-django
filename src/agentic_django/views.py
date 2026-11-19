@@ -175,6 +175,9 @@ class AgentRunFragmentView(LoginRequiredMixin, View):
 
 class AgentRunEventsView(LoginRequiredMixin, View):
     def get(self, request: HttpRequest, run_id: UUID) -> JsonResponse:
+        if not get_settings().enable_events:
+            return JsonResponse({"error": "events disabled"}, status=404)
+
         run = get_object_or_404(AgentRun, id=run_id, owner=request.user)
         after_param = request.GET.get("after")
         try:

@@ -12,8 +12,7 @@ from typing import TYPE_CHECKING, Protocol
 if TYPE_CHECKING:
     from django.contrib.auth.base_user import AbstractBaseUser
 
-from agents import Agent, Runner, RunState
-from agents.run_context import RunContextWrapper
+from agents import Agent, Runner
 from agents.items import TResponseInputItem
 from agents.memory.session import Session
 from agents.result import RunResult, RunResultStreaming
@@ -26,6 +25,7 @@ from django.utils import timezone
 from django.utils.module_loading import import_string
 
 from agentic_django.async_bridge import run_async
+from agentic_django.approvals import pause_for_approval, restore_run_state
 from agentic_django.conf import get_concurrency_limit, get_settings
 from agentic_django.models import (
     AgentApproval,
@@ -233,7 +233,7 @@ def execute_run(run_id: str) -> None:
         else:
 
             async def _run() -> RunResult:
-                state = await _restore_run_state(run, agent, context, decisions)
+                state = await restore_run_state(run, agent, context, decisions)
                 return await Runner.run(
                     agent,
                     state if state is not None else run_input(run.input_payload),
@@ -244,7 +244,14 @@ def execute_run(run_id: str) -> None:
 
             result = run_async(_run)
         if result.interruptions:
-            _pause_for_approval(run, result)
+            pause_for_approval(
+                run,
+                result,
+                serializer,
+                lambda current_run, approval: _record_approval_event(
+                    current_run, "approval_requested", approval
+                ),
+            )
             return
         run.final_output = json_value(serializer.serialize(result.final_output))
         run.raw_responses = json_value(serializer.serialize(result.raw_responses))
@@ -322,60 +329,6 @@ def _reserve_run_slot(run: AgentRun) -> bool:
         run.started_at = timezone.now()
         run.save(update_fields=["status", "started_at", "updated_at"])
     return True
-
-
-def _pause_for_approval(run: AgentRun, result: RunResult | RunResultStreaming) -> None:
-    state = json_value(result.to_state().to_json())
-    serializer = _get_serializer()
-    with transaction.atomic():
-        run.approval_round += 1
-        run.run_state = state
-        run.status = AgentRun.Status.WAITING_APPROVAL
-        run.task_id = ""
-        run.save(
-            update_fields=[
-                "approval_round",
-                "run_state",
-                "status",
-                "task_id",
-                "updated_at",
-            ]
-        )
-        for index, interruption in enumerate(result.interruptions):
-            approval = AgentApproval.objects.create(
-                run=run,
-                round=run.approval_round,
-                interruption_index=index,
-                tool_name=interruption.tool_name or "",
-                request=json_value(serializer.serialize(interruption.raw_item)),
-            )
-            _record_approval_event(run, "approval_requested", approval)
-
-
-async def _restore_run_state(
-    run: AgentRun, agent: Agent[object], context: object, decisions: list[AgentApproval]
-) -> RunState[object, Agent[object]] | None:
-    if run.run_state is None:
-        return None
-    if not isinstance(run.run_state, dict):
-        raise ValueError("Stored run state is invalid")
-    state = await RunState.from_json(
-        agent,
-        run.run_state,
-        context_override=RunContextWrapper(context) if context is not None else None,
-    )
-    interruptions = state.get_interruptions()
-    if len(interruptions) != len(decisions) or any(
-        decision.decision == AgentApproval.Decision.PENDING for decision in decisions
-    ):
-        raise ValueError("Run approval decisions are incomplete")
-    for approval in decisions:
-        interruption = interruptions[approval.interruption_index]
-        if approval.decision == AgentApproval.Decision.APPROVED:
-            state.approve(interruption)
-        else:
-            state.reject(interruption)
-    return state
 
 
 def resolve_approval(
@@ -492,7 +445,7 @@ def _run_with_events(
     starting_sequence = _next_event_sequence(run)
 
     async def _consume() -> RunResultStreaming:
-        state = await _restore_run_state(run, agent, context, decisions)
+        state = await restore_run_state(run, agent, context, decisions)
         result = Runner.run_streamed(
             agent,
             state if state is not None else run_input(run.input_payload),

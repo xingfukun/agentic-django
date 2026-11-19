@@ -337,9 +337,11 @@ values. Custom serializers implement the protocols in
 
 SDK calls use one event loop per process so shared async clients can reuse their
 connections. Tool approvals use the OpenAI Agents SDK's serialized `RunState`.
-This branch pins `openai-agents==0.19.4`; existing installations should migrate
-before starting workers. Checkpoint schema compatibility across SDK upgrades is
-not guaranteed, so resolve outstanding approvals before changing that version.
+This version supports `openai-agents>=0.19.4,<0.20`. The lower bound matches
+the tested lockfile; the upper bound limits untested SDK changes. Existing
+installations should migrate before starting workers. Checkpoint schema
+compatibility across SDK upgrades is not guaranteed, so resolve outstanding
+approvals before changing that version.
 
 When a tool marked `needs_approval` interrupts a run, the run becomes
 `waiting_approval`, with one `AgentApproval` per tool call. The run detail API
@@ -350,7 +352,9 @@ the same logical run after all pending calls have been resolved; rejection is
 passed to the SDK, rather than failing the run. A repeated identical decision
 is idempotent; a conflicting decision returns 409. The `approval_requested`
 and `approval_resolved` events are persisted even with streaming disabled.
-The owner-scoped event endpoint remains available for those approval events.
+The event endpoint retains its existing opt-in behavior: it is available only
+when `AGENTIC_DJANGO_ENABLE_EVENTS` is enabled. The run detail endpoint exposes
+pending approval requests independently of event streaming.
 
 The run checkpoint and approval request can include tool arguments and context.
 Protect database access accordingly. A waiting run does not consume a global

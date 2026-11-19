@@ -8,7 +8,7 @@ authors = [
 dependencies = [
     "Django>=6.1",
     "django-tasks>=0.12.0",
-    "openai-agents==0.19.4",
+    "openai-agents>=0.19.4,<0.20",
     "pydantic>=2.13.4",
     "django-htmx>=1.29.0",
 ]

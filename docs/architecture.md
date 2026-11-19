@@ -12,6 +12,7 @@ JSON and HTMX polling endpoints.
 | Types | `src/agentic_django/types.py` | Defines JSON, cleanup, and run-option types and validates SDK input items and options. |
 | Settings | `src/agentic_django/conf.py` | Reads and validates `AGENTIC_DJANGO_*` settings, cleanup policy, rate limits, and concurrency limits. |
 | Async bridge | `src/agentic_django/async_bridge.py` | Runs async SDK and session calls on one event loop per process. Preserves database work on the calling worker thread. |
+| Approval checkpoints | `src/agentic_django/approvals.py` | Stores SDK interruption snapshots and rebuilds state from durable decisions. |
 | Models | `src/agentic_django/models.py` | Stores sessions, ordered session items, runs, semantic events, per-owner request counters, and a global dispatch lock row. |
 | Session backend | `src/agentic_django/sessions.py` | Implements the Agents SDK session protocol with ordered database-backed items. |
 | Registry | `src/agentic_django/registry.py` | Loads the host app's agent factory registry and resolves `agent_key` values. |
@@ -85,8 +86,10 @@ Keep dependencies mostly one-way:
   services, tasks, or views.
 - `rate_limits.py` may depend on models and Django database operations.
 - `sessions.py` may depend on settings, models, serializers, and signals.
+- `approvals.py` depends on models and serializers; services supplies event
+  notifications and owns enqueue and dispatch transactions.
 - `services.py` owns orchestration and may depend on settings, models,
-  registry, serializers, sessions, tasks, and signals.
+  registry, serializers, sessions, approvals, tasks, and signals.
 - `tasks.py` should remain a thin task entry point into services.
 - `views.py` owns HTTP payload validation and response shape, then delegates
   execution to services/session helpers.
@@ -155,7 +158,9 @@ ends without an exception.
 
 The approval endpoint is owner-scoped. Decision transactions use the dispatch
 lock to prevent duplicate consumption. `approval_requested` and
-`approval_resolved` events share the run's ordered sequence. SDK checkpoint
+`approval_resolved` events share the run's ordered sequence. The existing
+event endpoint stays disabled when event streaming is disabled; approval
+requests remain available through the run detail endpoint. SDK checkpoint
 schema depends on the pinned SDK version. Approval requests and snapshots
 contain potentially sensitive tool arguments and must be protected.
 
