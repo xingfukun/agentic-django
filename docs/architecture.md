@@ -12,6 +12,7 @@ JSON and HTMX polling endpoints.
 | Types | `src/agentic_django/types.py` | Defines JSON, cleanup, and run-option types and validates SDK input items and options. |
 | Settings | `src/agentic_django/conf.py` | Reads and validates `AGENTIC_DJANGO_*` settings, cleanup policy, rate limits, and concurrency limits. |
 | Async bridge | `src/agentic_django/async_bridge.py` | Runs async SDK and session calls on one event loop per process. Preserves database work on the calling worker thread. |
+| Approval checkpoints | `src/agentic_django/approvals.py` | Stores SDK interruption snapshots and rebuilds state from durable decisions. |
 | Models | `src/agentic_django/models.py` | Stores sessions, ordered session items, runs, semantic events, per-owner request counters, and a global dispatch lock row. |
 | Session backend | `src/agentic_django/sessions.py` | Implements the Agents SDK session protocol with ordered database-backed items. |
 | Registry | `src/agentic_django/registry.py` | Loads the host app's agent factory registry and resolves `agent_key` values. |
@@ -36,13 +37,21 @@ JSON and HTMX polling endpoints.
 4. If events are disabled, `Runner.run` is executed through the async bridge.
    If events are enabled, `Runner.run_streamed` is used and semantic
    `RunItemStreamEvent`/`AgentUpdatedStreamEvent` payloads are persisted.
-   The default event serializer skips raw token events.
-5. Completion serializes the result and saves `final_output`,
+   The default event serializer skips raw token events. The optional
+   `TextDeltaEventSerializer` persists text deltas through the same event path.
+5. Approval interruptions serialize the SDK `RunState` in `AgentRun.run_state`,
+   create indexed `AgentApproval` records, and transition to `waiting_approval`.
+   Decision requests atomically record approvals, then requeue the same run once
+   all approvals in the round are resolved. Execution restores the checkpoint,
+   applies decisions to SDK interruption items, and resumes. Further approval
+   rounds are supported. Waiting frees global concurrency capacity but reserves
+   the session from other runs.
+6. Completion serializes the result and saves `final_output`,
    `raw_responses`, `last_response_id`, and completed status, clears the task ID,
    then sends `agent_run_completed` and releases agent references.
-6. Failure stores a sanitized error when `DEBUG=False`, marks the run failed,
+7. Failure stores a sanitized error when `DEBUG=False`, marks the run failed,
    sends `agent_run_failed`, and re-raises for worker observability.
-7. HTMX clients poll the fragment endpoint. Terminal runs return
+8. HTMX clients poll the fragment endpoint. Terminal runs return
    `HttpResponseStopPolling` and emit `HX-Trigger: run-update` so dependent UI
    panels can update from the same polling loop.
 
@@ -78,8 +87,10 @@ Keep dependencies mostly one-way:
   services, tasks, or views.
 - `rate_limits.py` may depend on models and Django database operations.
 - `sessions.py` may depend on settings, models, serializers, and signals.
+- `approvals.py` depends on models and serializers; services supplies event
+  notifications and owns enqueue and dispatch transactions.
 - `services.py` owns orchestration and may depend on settings, models,
-  registry, serializers, sessions, tasks, and signals.
+  registry, serializers, sessions, approvals, tasks, and signals.
 - `tasks.py` should remain a thin task entry point into services.
 - `views.py` owns HTTP payload validation and response shape, then delegates
   execution to services/session helpers.
@@ -146,10 +157,13 @@ logged and does not replace the completed or failed outcome of the current run.
 A cancelled SDK run task marks a streamed run failed, even when the event stream
 ends without an exception.
 
-The package has no tool approval or resume endpoint. A returned SDK result with
-pending approval interruptions marks the run failed. It must not be reported as
-completed. Host applications must resolve approval within their tool integration
-or use a workflow that stores and resumes the SDK state.
+The approval endpoint is owner-scoped. Decision transactions use the dispatch
+lock to prevent duplicate consumption. `approval_requested` and
+`approval_resolved` events share the run's ordered sequence. The existing
+event endpoint stays disabled when event streaming is disabled; approval
+requests remain available through the run detail endpoint. SDK checkpoint
+schema depends on the pinned SDK version. Approval requests and snapshots
+contain potentially sensitive tool arguments and must be protected.
 
 ## Queue reservations
 

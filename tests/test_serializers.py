@@ -6,14 +6,19 @@ from datetime import date
 import pytest
 from agents import Agent
 from agents.items import ToolCallItem
-from agents.stream_events import AgentUpdatedStreamEvent, RunItemStreamEvent
-from openai.types.responses import ResponseFunctionToolCall
+from agents.stream_events import (
+    AgentUpdatedStreamEvent,
+    RawResponsesStreamEvent,
+    RunItemStreamEvent,
+)
+from openai.types.responses import ResponseFunctionToolCall, ResponseTextDeltaEvent
 from pydantic import BaseModel
 
 from agentic_django.serializers import (
     JsonSerializer,
     SessionItemSerializer,
     StreamEventSerializer,
+    TextDeltaEventSerializer,
     _to_jsonable,
 )
 
@@ -87,6 +92,29 @@ def test_stream_event_serializer_handles_events() -> None:
     serialized_agent = agent_payload.get("agent")
     assert isinstance(serialized_agent, dict)
     assert serialized_agent.get("name") == "Test Agent"
+
+
+def test_text_delta_event_serializer_is_opt_in() -> None:
+    event = RawResponsesStreamEvent(
+        data=ResponseTextDeltaEvent(
+            content_index=0,
+            delta="你好",
+            item_id="message-1",
+            logprobs=[],
+            output_index=0,
+            sequence_number=1,
+            type="response.output_text.delta",
+        )
+    )
+    assert StreamEventSerializer().serialize(event) is None
+    assert TextDeltaEventSerializer().serialize(event) == {
+        "type": "raw_response_event",
+        "name": "text_delta",
+        "delta": "你好",
+        "item_id": "message-1",
+        "output_index": 0,
+        "content_index": 0,
+    }
 
 
 def test_serializer_rejects_non_json_values() -> None:

@@ -336,10 +336,34 @@ values. Custom serializers implement the protocols in
 `agentic_django.serializers`; deserialized session items must match the SDK schema.
 
 SDK calls use one event loop per process so shared async clients can reuse their
-connections. The package does not provide tool approval or resume endpoints.
-If the SDK returns pending approvals, the run is marked failed. See the SDK's
-[tool approval guide](https://openai.github.io/openai-agents-python/human_in_the_loop/)
-when a host application needs approval and resume support.
+connections. Tool approvals use the OpenAI Agents SDK's serialized `RunState`.
+The package keeps its existing `openai-agents>=0.19.4` dependency range. The
+repository lockfile tests version 0.19.4. Existing installations should migrate
+before starting workers. Checkpoint schema compatibility across SDK upgrades is
+not guaranteed: resolve outstanding approvals before upgrading the SDK, and
+validate the target version's snapshot format.
+
+When a tool marked `needs_approval` interrupts a run, the run becomes
+`waiting_approval`, with one `AgentApproval` per tool call. The run detail API
+returns `approvals` with ID, tool name, request payload, and decision. Submit
+`POST /agents/runs/<run_id>/approvals/<approval_id>/` with JSON
+`{"decision": "approved"}` or `{"decision": "rejected"}`. Both decisions resume
+the same logical run after all pending calls have been resolved; rejection is
+passed to the SDK, rather than failing the run. A repeated identical decision
+is idempotent; a conflicting decision returns 409. The `approval_requested`
+and `approval_resolved` events are persisted even with streaming disabled.
+The event endpoint retains its existing opt-in behavior: it is available only
+when `AGENTIC_DJANGO_ENABLE_EVENTS` is enabled. The run detail endpoint exposes
+pending approval requests independently of event streaming.
+
+The run checkpoint and approval request can include tool arguments and context.
+Protect database access accordingly. A waiting run does not consume a global
+worker slot, but blocks later runs for its session until resolved. The default
+HTMX fragment shows a waiting status; hosts render their own review controls.
+If a resumed worker crashes after executing an approved tool, operator requeue
+can repeat that tool action, as with other run recovery. Make write tools
+idempotent using a business operation key. See the SDK's
+[tool approval guide](https://openai.github.io/openai-agents-python/human_in_the_loop/).
 
 ## Optional dependencies
 
@@ -358,6 +382,23 @@ GET /agents/runs/<uuid:run_id>/events/?after=<sequence>&limit=<n>
 
 You can also subscribe to the Django signal `agent_run_event` to push UI updates
 after each event is stored.
+
+To persist generated text deltas as they arrive, opt in to the provided event
+serializer:
+
+```python
+AGENTIC_DJANGO_ENABLE_EVENTS = True
+AGENTIC_DJANGO_EVENT_SERIALIZER = (
+    "agentic_django.serializers.TextDeltaEventSerializer"
+)
+```
+
+Text delta events have `event_type="raw_response_event"` and payload
+`name="text_delta"`, `delta`, `item_id`, `output_index`, and `content_index`.
+Other raw SDK events remain filtered. This uses the existing event store and
+polling endpoint; a host app can relay events over its own SSE or WebSocket
+connection. Each delta writes a database row, so use the default semantic-only
+serializer when token-level updates are unnecessary.
 
 ## Operations
 

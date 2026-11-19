@@ -26,6 +26,10 @@
       <span class="agent-run__spinner" aria-hidden="true"></span>
       <span>Running</span>
     </div>
+  {% elif run.status == "waiting_approval" %}
+    <div class="agent-run__status agent-run__status--waiting-approval">
+      <div class="agent-run__label">Waiting for approval</div>
+    </div>
   {% elif run.status == "completed" %}
     <div class="agent-run__status agent-run__status--completed">
       <div class="agent-run__label">Completed</div>

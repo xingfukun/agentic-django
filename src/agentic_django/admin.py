@@ -112,7 +112,8 @@ class AgentRunAdmin(RunAdminBase):
 
     @admin.action(permissions=["change"], description="Requeue selected runs")
     def requeue_runs(self, request: HttpRequest, queryset: QuerySet[AgentRun]) -> None:
-        runs = queryset.exclude(status=AgentRun.Status.RUNNING)
+        blocked = [AgentRun.Status.RUNNING, AgentRun.Status.WAITING_APPROVAL]
+        runs = queryset.exclude(status__in=blocked)
         run_ids = list(runs.values_list("id", flat=True))
         updated = runs.update(
             status=AgentRun.Status.PENDING,
@@ -127,10 +128,10 @@ class AgentRunAdmin(RunAdminBase):
         )
         for run_id in run_ids:
             enqueue_agent_run(str(run_id))
-        skipped = queryset.filter(status=AgentRun.Status.RUNNING).count()
+        skipped = queryset.filter(status__in=blocked).count()
         self.message_user(
             request,
-            f"Requeued {updated} runs. Skipped {skipped} running runs.",
+            f"Requeued {updated} runs. Skipped {skipped} active runs.",
         )
 
     @admin.action(permissions=["delete"], description="Purge selected runs")

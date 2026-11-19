@@ -83,7 +83,11 @@ class Command(BaseCommand):
         if "sessions_days" in policy:
             cutoff = now - timedelta(days=policy["sessions_days"])
             sessions = AgentSession.objects.filter(updated_at__lt=cutoff).exclude(
-                runs__status__in=[AgentRun.Status.PENDING, AgentRun.Status.RUNNING]
+                runs__status__in=[
+                    AgentRun.Status.PENDING,
+                    AgentRun.Status.RUNNING,
+                    AgentRun.Status.WAITING_APPROVAL,
+                ]
             )
             require_empty = policy.get("sessions_require_empty", True)
             if require_empty:

@@ -12,6 +12,7 @@ from agents.stream_events import (
     RunItemStreamEvent,
     StreamEvent,
 )
+from openai.types.responses import ResponseTextDeltaEvent
 from pydantic import BaseModel
 
 from agentic_django.types import JsonObject, JsonValue, input_items, json_value
@@ -65,6 +66,24 @@ class StreamEventSerializer:
 
     def deserialize(self, value: JsonValue) -> JsonValue:
         return json_value(value)
+
+
+class TextDeltaEventSerializer(StreamEventSerializer):
+    """Opt in to persisting generated text deltas alongside semantic events."""
+
+    def serialize(self, value: StreamEvent) -> JsonObject | None:
+        if isinstance(value, RawResponsesStreamEvent) and isinstance(
+            value.data, ResponseTextDeltaEvent
+        ):
+            return {
+                "type": value.type,
+                "name": "text_delta",
+                "delta": value.data.delta,
+                "item_id": value.data.item_id,
+                "output_index": value.data.output_index,
+                "content_index": value.data.content_index,
+            }
+        return super().serialize(value)
 
 
 def _to_jsonable(value: object) -> JsonValue:

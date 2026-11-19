@@ -10,6 +10,10 @@ urlpatterns = [
     path("runs/", views.AgentRunCreateView.as_view(), name="run-create"),
     path("runs/<uuid:run_id>/", views.AgentRunDetailView.as_view(), name="run-detail"),
     path(
+        "runs/<uuid:run_id>/approvals/<uuid:approval_id>/",
+        views.AgentApprovalDecisionView.as_view(), name="approval-decision",
+    ),
+    path(
         "runs/<uuid:run_id>/fragment/",
         views.AgentRunFragmentView.as_view(),
         name="run-fragment",
