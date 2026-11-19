@@ -116,16 +116,16 @@ test for the behavior that made the edge necessary.
 ## Type Boundaries
 
 Package and test code use strict Mypy checks. JSON fields have explicit value
-types. JSON input is checked before storage. Session items use the SDK
-`TResponseInputItem` type and are checked after deserialization. Run options use
+types. Run submissions are checked against the SDK input schema before storage.
+The default Session serializer reads stored JSON objects with their SDK replay
+metadata intact, including `provider_data`. Run options use
 `RunOptions`; unknown option names and invalid values are rejected. JSON
 `run_config` objects are checked against the SDK dataclass fields. Settings can
 also supply constructed SDK configuration and callback objects.
 
-SDK iterable fields, such as reasoning summaries, become reusable lists after
-validation. Their members are checked before storage or an HTTP response. The
-shared JSON serializer also reads nested iterators into lists, so it preserves
-summary text instead of storing an iterator description.
+The request input validator checks SDK iterable fields and materializes them as
+reusable lists. The shared JSON serializer also reads nested iterators into lists
+to preserve fields such as reasoning summaries.
 
 Custom serializers implement the package serializer protocols. Session backends
 implement the SDK `Session` protocol and `get_or_create(session_key, owner)`.

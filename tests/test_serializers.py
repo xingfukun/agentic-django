@@ -122,12 +122,7 @@ def test_serializer_rejects_non_json_values() -> None:
         JsonSerializer().deserialize(float("nan"))
 
 
-def test_session_item_serializer_rejects_invalid_sdk_item() -> None:
+def test_session_item_serializer_rejects_non_object() -> None:
     serializer = SessionItemSerializer()
-    with pytest.raises(ValueError, match="SDK input schema"):
-        serializer.deserialize(
-            {
-                "role": "unknown",
-                "content": "hello",
-            }
-        )
+    with pytest.raises(ValueError, match="JSON object"):
+        serializer.deserialize([])

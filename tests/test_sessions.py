@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import pytest
+from agents import Agent
+from agents.items import ReasoningItem
 from django.contrib.auth.models import User
 from django.test import override_settings
+from openai.types.responses import ResponseReasoningItem
 
 from agentic_django.models import AgentSessionItem
 from agentic_django.sessions import DatabaseSession, get_session
@@ -56,14 +59,19 @@ def test_get_session_uses_backend(user: User) -> None:
 
 
 @pytest.mark.django_db()
-def test_database_session_preserves_reasoning_summaries(user: User) -> None:
+def test_database_session_preserves_reasoning_replay_data(user: User) -> None:
     session = DatabaseSession.get_or_create("reasoning", user)
     payload: JsonObject = {
         "type": "reasoning",
         "id": "rs_1",
         "summary": [{"type": "summary_text", "text": "Keep this summary."}],
+        "provider_data": {"model": "test-model", "response_id": "response-1"},
     }
-    session._add_items(input_items([payload]))
+    item = ReasoningItem(
+        agent=Agent[object](name="Test Agent"),
+        raw_item=ResponseReasoningItem.model_validate(payload),
+    )
+    session._add_items([item.to_input_item()])
 
     stored = AgentSessionItem.objects.get(session_id=session._session.id)
     assert stored.payload == payload

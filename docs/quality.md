@@ -27,10 +27,12 @@ Use SDK types for agents, sessions, input items, and results. Use `JsonValue` an
 field structures. Accept `object` for an unknown value, then validate and narrow
 its type before use. Do not replace a known structure with `dict[str, object]`.
 
-Settings and decoded request data are checked at runtime. Session reads validate
-stored items against the SDK input schema. Host serializers must implement the
-protocols in `agentic_django.serializers`. Their persisted results must be JSON
-data. The registry checks keys and factories and checks each returned agent.
+Settings and decoded request data are checked at runtime. Run input remains
+subject to the SDK input schema. The default Session serializer checks that
+stored items are JSON objects and preserves SDK replay metadata. Host serializers
+must implement the protocols in `agentic_django.serializers`. Their persisted
+results must be JSON data. The registry checks keys and factories and checks
+each returned agent.
 The host app must keep its agent context type consistent with its context factory.
 Python cannot check that relationship across dynamically imported components.
 
@@ -47,6 +49,8 @@ Keep exceptions on individual lines and state their cause:
   cannot establish their full Python signatures and annotations.
 - The SDK input adapter checks item fields and reads lazy iterables in JSON
   mode. A result cast retains the SDK item type after those fields become lists.
+- The default Session serializer checks the JSON object boundary and casts the
+  stored SDK item while preserving replay metadata fields.
 - Tests for custom user models need local assignment exceptions where Django
   stubs resolve the user to the single model in `tests.settings`. The custom
   user test also removes the inherited username field with a local exception.

@@ -17,7 +17,7 @@ from agentic_django.conf import get_settings
 from agentic_django.models import AgentSession, AgentSessionItem
 from agentic_django.serializers import ItemSerializer
 from agentic_django.signals import agent_session_created
-from agentic_django.types import input_items, json_value
+from agentic_django.types import json_value
 
 
 class DatabaseSession(SessionABC):
@@ -59,7 +59,7 @@ class DatabaseSession(SessionABC):
             items = list(reversed(list(queryset)))
         else:
             items = list(queryset)
-        return input_items([serializer.deserialize(item.payload) for item in items])
+        return [serializer.deserialize(item.payload) for item in items]
 
     def _add_items(self, items: list[TResponseInputItem]) -> None:
         if not items:
@@ -104,9 +104,9 @@ class DatabaseSession(SessionABC):
             )
             if last_item is None:
                 return None
-            payload = last_item.payload
+            item = serializer.deserialize(last_item.payload)
             last_item.delete()
-            return input_items([serializer.deserialize(payload)])[0]
+            return item
 
     def _clear_session(self) -> None:
         with transaction.atomic():

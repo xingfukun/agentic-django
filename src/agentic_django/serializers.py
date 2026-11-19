@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Iterator, Mapping
-from typing import Protocol, runtime_checkable
+from typing import Protocol, cast, runtime_checkable
 
 from agents import Agent
 from agents.items import RunItem, TResponseInputItem
@@ -15,7 +15,7 @@ from agents.stream_events import (
 from openai.types.responses import ResponseTextDeltaEvent
 from pydantic import BaseModel
 
-from agentic_django.types import JsonObject, JsonValue, input_items, json_value
+from agentic_django.types import JsonObject, JsonValue, json_value
 
 
 @runtime_checkable
@@ -48,7 +48,11 @@ class SessionItemSerializer:
         return _to_jsonable(value)
 
     def deserialize(self, value: JsonValue) -> TResponseInputItem:
-        return input_items([value])[0]
+        item = json_value(value)
+        if not isinstance(item, dict):
+            raise ValueError("Stored session item must be a JSON object")
+        # SDK-generated history can carry replay metadata such as provider_data.
+        return cast(TResponseInputItem, item)
 
 
 class StreamEventSerializer:
