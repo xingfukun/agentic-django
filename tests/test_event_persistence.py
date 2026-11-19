@@ -5,14 +5,61 @@ from collections.abc import AsyncIterator
 
 import pytest
 from agents import Agent
-from agents.stream_events import AgentUpdatedStreamEvent, StreamEvent
+from agents.stream_events import (
+    AgentUpdatedStreamEvent,
+    RawResponsesStreamEvent,
+    StreamEvent,
+)
 from asgiref.sync import async_to_sync
 from django.contrib.auth.models import User
+from openai.types.responses import ResponseTextDeltaEvent
 
 from agentic_django.models import AgentEvent, AgentRun, AgentSession
-from agentic_django.serializers import StreamEventSerializer
+from agentic_django.serializers import StreamEventSerializer, TextDeltaEventSerializer
 from agentic_django.services import _consume_stream_events
 from agentic_django.signals import agent_run_event
+
+
+@pytest.mark.django_db(transaction=True)
+def test_opt_in_text_deltas_use_existing_event_store(user: User) -> None:
+    session = AgentSession.objects.create(session_key="text-deltas", owner=user)
+    run = AgentRun.objects.create(
+        session=session, owner=user, agent_key="default", input_payload="hi"
+    )
+
+    class Stream:
+        run_loop_task: asyncio.Task[None] | None = None
+
+        def cancel(self) -> None:
+            pass
+
+        def release_agents(self) -> None:
+            pass
+
+        async def stream_events(self) -> AsyncIterator[StreamEvent]:
+            yield RawResponsesStreamEvent(
+                data=ResponseTextDeltaEvent(
+                    content_index=0,
+                    delta="hello",
+                    item_id="message-1",
+                    logprobs=[],
+                    output_index=0,
+                    sequence_number=1,
+                    type="response.output_text.delta",
+                )
+            )
+
+    async_to_sync(_consume_stream_events)(
+        run=run,
+        result=Stream(),
+        event_serializer=TextDeltaEventSerializer(),
+        starting_sequence=1,
+    )
+    event = AgentEvent.objects.get(run=run)
+    assert event.sequence == 1
+    assert event.event_type == "raw_response_event"
+    assert isinstance(event.payload, dict)
+    assert event.payload["delta"] == "hello"
 
 
 @pytest.mark.django_db(transaction=True)

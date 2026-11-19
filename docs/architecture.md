@@ -37,7 +37,8 @@ JSON and HTMX polling endpoints.
 4. If events are disabled, `Runner.run` is executed through the async bridge.
    If events are enabled, `Runner.run_streamed` is used and semantic
    `RunItemStreamEvent`/`AgentUpdatedStreamEvent` payloads are persisted.
-   The default event serializer skips raw token events.
+   The default event serializer skips raw token events. The optional
+   `TextDeltaEventSerializer` persists text deltas through the same event path.
 5. Approval interruptions serialize the SDK `RunState` in `AgentRun.run_state`,
    create indexed `AgentApproval` records, and transition to `waiting_approval`.
    Decision requests atomically record approvals, then requeue the same run once

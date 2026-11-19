@@ -383,6 +383,23 @@ GET /agents/runs/<uuid:run_id>/events/?after=<sequence>&limit=<n>
 You can also subscribe to the Django signal `agent_run_event` to push UI updates
 after each event is stored.
 
+To persist generated text deltas as they arrive, opt in to the provided event
+serializer:
+
+```python
+AGENTIC_DJANGO_ENABLE_EVENTS = True
+AGENTIC_DJANGO_EVENT_SERIALIZER = (
+    "agentic_django.serializers.TextDeltaEventSerializer"
+)
+```
+
+Text delta events have `event_type="raw_response_event"` and payload
+`name="text_delta"`, `delta`, `item_id`, `output_index`, and `content_index`.
+Other raw SDK events remain filtered. This uses the existing event store and
+polling endpoint; a host app can relay events over its own SSE or WebSocket
+connection. Each delta writes a database row, so use the default semantic-only
+serializer when token-level updates are unnecessary.
+
 ## Operations
 
 Prune old data with the cleanup command (uses `AGENTIC_DJANGO_CLEANUP_POLICY` by default):
