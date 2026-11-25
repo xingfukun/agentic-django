@@ -30,6 +30,7 @@ class AgenticDjangoSettings:
     rate_limit: str | None
     max_input_bytes: int | None
     max_input_items: int | None
+    stop_after_approval_resume: str | None = None
 
 
 def _get_setting(name: str, default: object = None) -> object:
@@ -92,6 +93,9 @@ def get_settings() -> AgenticDjangoSettings:
         ),
         concurrency_limit=_positive_integer("AGENTIC_DJANGO_CONCURRENCY_LIMIT"),
         context_factory=_optional_string("AGENTIC_DJANGO_CONTEXT_FACTORY"),
+        stop_after_approval_resume=_optional_string(
+            "AGENTIC_DJANGO_STOP_AFTER_APPROVAL_RESUME"
+        ),
         rate_limit=_optional_string("AGENTIC_DJANGO_RATE_LIMIT"),
         max_input_bytes=_positive_integer("AGENTIC_DJANGO_MAX_INPUT_BYTES"),
         max_input_items=_positive_integer("AGENTIC_DJANGO_MAX_INPUT_ITEMS"),
@@ -238,4 +242,11 @@ def validate_settings() -> None:
         import_from_path(config.context_factory)
     ):
         raise ImproperlyConfigured("Context factory must be callable")
+    if config.stop_after_approval_resume:
+        if not config.enable_events:
+            raise ImproperlyConfigured(
+                "AGENTIC_DJANGO_STOP_AFTER_APPROVAL_RESUME requires event streaming"
+            )
+        if not callable(import_from_path(config.stop_after_approval_resume)):
+            raise ImproperlyConfigured("Approval resume stop policy must be callable")
     parse_rate_limit(config.rate_limit)
