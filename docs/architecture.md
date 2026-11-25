@@ -108,6 +108,10 @@ test for the behavior that made the edge necessary.
 - `AGENTIC_DJANGO_SESSION_ITEM_SERIALIZER`, `AGENTIC_DJANGO_SERIALIZER`, and
   `AGENTIC_DJANGO_EVENT_SERIALIZER`: JSON boundary customization.
 - `AGENTIC_DJANGO_CONTEXT_FACTORY`: rebuilds typed context from run metadata.
+- `AGENTIC_DJANGO_STOP_AFTER_APPROVAL_RESUME`: optional dotted path to a
+  synchronous policy called as `policy(run=run)` for streamed approval resumes.
+  A true result finishes the restored turn, saves its decisions to Session
+  history, and stops before the next model call. Requires event streaming.
 - Django signals: `agent_session_created`, `agent_run_started`,
   `agent_run_completed`, `agent_run_failed`, and `agent_run_event`.
 - Template overrides: downstream projects may override
