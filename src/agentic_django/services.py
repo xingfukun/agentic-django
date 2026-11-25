@@ -412,6 +412,11 @@ def _run_with_events(
 ) -> RunResultStreaming:
     event_serializer = _get_event_serializer()
     starting_sequence = _next_event_sequence(run)
+    stop_after_resume = False
+    if run.run_state is not None:
+        policy_path = get_settings().stop_after_approval_resume
+        if policy_path:
+            stop_after_resume = bool(import_string(policy_path)(run=run))
 
     async def _consume() -> RunResultStreaming:
         state = await restore_run_state(run, agent, context)
@@ -422,6 +427,9 @@ def _run_with_events(
             context=context,
             **run_options,
         )
+        if state is not None and stop_after_resume:
+            # Finish applying the decisions and saving session history before the next turn.
+            result.cancel(mode="after_turn")
         await _consume_stream_events(
             run=run,
             result=result,
